@@ -1,0 +1,742 @@
+/* =========================================================================
+   FIRSTS — design system
+   Cold chrome, CRT scanlines, archival HUD. Dark only: the whole thing is a
+   reading-room instrument, and a light mode would fight the chrome.
+   ========================================================================= */
+
+:root {
+  --ink: #08080a;
+  --ink-2: #0e0e11;
+  --ink-3: #14141a;
+  --paper: #ece9e2;
+  --grey: #8c9099;
+  --grey-dim: #5a5e66;
+  --line: rgba(236, 233, 226, 0.11);
+  --line-strong: rgba(236, 233, 226, 0.22);
+
+  --vermilion: #e5482c;
+  --amber: #d9a441;
+  --jade: #4ea87a;
+  --sky: #7fa6c9;
+
+  --chrome: linear-gradient(
+    177deg,
+    #ffffff 0%,
+    #c9ccd2 16%,
+    #6e737d 34%,
+    #eef0f3 49%,
+    #9aa0aa 62%,
+    #44484f 78%,
+    #d7dade 100%
+  );
+
+  --gutter: clamp(18px, 4vw, 64px);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --nav-h: 62px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ink);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-stretch: 100%;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.55;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--vermilion);
+  color: #fff;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+/* ---------------------------------------------------------------- texture */
+/* Two fixed overlays: a scanline comb and an animated grain field. Both are
+   pointer-events:none and sit above everything except the cursor. */
+
+.tex-scan,
+.tex-grain,
+.tex-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9000;
+}
+
+.tex-scan {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.22) 3px,
+    rgba(0, 0, 0, 0.22) 4px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.4;
+}
+
+/* Static. An always-running full-viewport blended layer is a real GPU and
+   battery cost on every visitor, and a still grain over the scanline comb
+   reads the same. The motion budget is spent on things that carry meaning. */
+.tex-grain {
+  opacity: 0.3;
+  mix-blend-mode: overlay;
+  background-image: var(--grain-url);
+  background-size: 180px 180px;
+}
+
+.tex-vignette {
+  background: radial-gradient(ellipse at 50% 40%, transparent 58%, rgba(0, 0, 0, 0.5) 100%);
+  z-index: 8999;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------- typography */
+
+.hud {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--grey-dim);
+  line-height: 1.4;
+}
+
+.hud-b {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--grey);
+}
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.display {
+  font-family: var(--font-display), ui-sans-serif, sans-serif;
+  font-weight: 800;
+  font-stretch: 125%;
+  letter-spacing: -0.035em;
+  line-height: 0.86;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.d-xxl { font-size: clamp(2.4rem, 7.6vw, 7.6rem); }
+.d-xl  { font-size: clamp(2.1rem, 6vw, 5.2rem); }
+.d-l   { font-size: clamp(1.8rem, 4.2vw, 3.4rem); }
+.d-m   { font-size: clamp(1.5rem, 3vw, 2.4rem); }
+
+/* Chrome fill. The gradient is clipped to the glyphs; a faint drop shadow
+   underneath keeps it from dissolving into the dark background. */
+.chrome {
+  background: var(--chrome);
+  background-size: 100% 180%;
+  background-position: 50% 42%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.55));
+}
+
+.lede {
+  font-size: clamp(1rem, 1.5vw, 1.22rem);
+  line-height: 1.5;
+  color: var(--grey);
+  max-width: 62ch;
+}
+
+.lede strong {
+  color: var(--paper);
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.shell {
+  width: 100%;
+  max-width: 1560px;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.section {
+  position: relative;
+  padding-block: clamp(80px, 12vh, 160px);
+}
+
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+.grid-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+
+.grid-lines span {
+  border-left: 1px solid var(--line);
+}
+
+.grid-lines span:first-child {
+  border-left: 0;
+}
+
+@media (max-width: 720px) {
+  .grid-lines { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Section marker: the N°001 / INTRO label pattern. */
+.marker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: clamp(28px, 5vh, 56px);
+}
+
+.marker::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vermilion);
+  flex: none;
+}
+
+.marker-line {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* -------------------------------------------------------------- reveal fx */
+
+.reveal-line {
+  display: block;
+  overflow: hidden;
+}
+
+.reveal-line > span {
+  display: block;
+  will-change: transform;
+}
+
+.char {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+.fade-up {
+  will-change: transform, opacity;
+}
+
+/* --------------------------------------------------------------- controls */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--paper);
+  background: rgba(236, 233, 226, 0.03);
+  overflow: hidden;
+  transition: color 0.35s var(--ease), border-color 0.35s var(--ease);
+}
+
+.btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--paper);
+  transform: translateY(101%);
+  transition: transform 0.45s var(--ease);
+  z-index: -1;
+}
+
+.btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--paper);
+}
+
+.btn:hover:not(:disabled)::after {
+  transform: translateY(0);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-accent {
+  border-color: var(--vermilion);
+  color: var(--vermilion);
+}
+
+.btn-accent::after {
+  background: var(--vermilion);
+}
+
+.btn-accent:hover:not(:disabled) {
+  color: #fff;
+}
+
+.btn-sm {
+  padding: 9px 14px;
+  font-size: 10px;
+}
+
+.field {
+  display: block;
+  width: 100%;
+  padding: 13px 14px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--paper);
+  font-family: var(--font-mono), monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--line-strong);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.field::placeholder {
+  color: var(--grey-dim);
+}
+
+textarea.field {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--grey-dim);
+}
+
+.hint {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--grey-dim);
+}
+
+/* ----------------------------------------------------------------- panels */
+
+.panel {
+  position: relative;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(236, 233, 226, 0.035), rgba(236, 233, 226, 0.008));
+  border-radius: 3px;
+}
+
+.panel-pad {
+  padding: clamp(18px, 2.4vw, 30px);
+}
+
+/* Corner ticks — the archival-instrument detail that sells the whole look. */
+.ticks::before,
+.ticks::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--line-strong);
+  pointer-events: none;
+}
+
+.ticks::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.ticks::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* ------------------------------------------------------------------ tones */
+
+.tone-good { color: var(--jade); }
+.tone-bad { color: var(--vermilion); }
+.tone-warn { color: var(--amber); }
+.tone-muted { color: var(--grey-dim); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* -------------------------------------------------------------- meter bar */
+
+.meter {
+  height: 3px;
+  background: rgba(236, 233, 226, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  transform-origin: left;
+}
+
+/* ------------------------------------------------------------------ table */
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tbl th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono), monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--grey-dim);
+  font-weight: 400;
+}
+
+.tbl td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  color: var(--grey);
+}
+
+.tbl tr:last-child td {
+  border-bottom: 0;
+}
+
+/* --------------------------------------------------------------- marquee */
+
+.marquee {
+  position: relative;
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  user-select: none;
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+.marquee-track {
+  display: flex;
+  flex: none;
+  gap: 0.35em;
+  padding-right: 0.35em;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+/* ---------------------------------------------------------------- cursor */
+
+.cursor-dot,
+.cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 9500;
+  border-radius: 50%;
+  mix-blend-mode: difference;
+}
+
+.cursor-dot {
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  background: var(--paper);
+}
+
+.cursor-ring {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border: 1px solid rgba(236, 233, 226, 0.5);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .cursor-dot,
+  .cursor-ring { display: none; }
+}
+
+/* -------------------------------------------------------------- preloader */
+
+.preloader {
+  position: fixed;
+  inset: 0;
+  z-index: 9800;
+  background: var(--ink);
+  display: grid;
+  place-items: center;
+}
+
+.preloader-inner {
+  width: min(720px, 86vw);
+}
+
+.preloader-count {
+  font-family: var(--font-display), sans-serif;
+  font-weight: 800;
+  font-stretch: 125%;
+  font-size: clamp(4rem, 16vw, 12rem);
+  line-height: 0.8;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.preloader-bar {
+  height: 1px;
+  background: var(--line);
+  margin-top: 26px;
+  overflow: hidden;
+}
+
+.preloader-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--paper);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+/* ------------------------------------------------------------------- nav */
+
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 8000;
+  height: var(--nav-h);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-inline: var(--gutter);
+  border-bottom: 1px solid transparent;
+  transition: background 0.4s var(--ease), border-color 0.4s var(--ease),
+    backdrop-filter 0.4s var(--ease);
+}
+
+.nav[data-stuck="true"] {
+  background: rgba(8, 8, 10, 0.78);
+  backdrop-filter: blur(14px) saturate(140%);
+  border-bottom-color: var(--line);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.nav-link {
+  position: relative;
+  padding: 8px 12px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--grey);
+  transition: color 0.3s var(--ease);
+}
+
+.nav-link:hover,
+.nav-link[data-active="true"] {
+  color: var(--paper);
+}
+
+.nav-link[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 2px;
+  height: 1px;
+  background: var(--vermilion);
+}
+
+@media (max-width: 720px) {
+  .nav-link { padding: 8px 6px; font-size: 9.5px; letter-spacing: 0.08em; }
+  .nav { gap: 8px; }
+  .nav-links { gap: 0; }
+}
+
+/* At phone width the wordmark, three links and a wallet button no longer fit
+   on one row. The index link is the one to drop: the wordmark already goes home. */
+@media (max-width: 480px) {
+  .nav-link[href="/"] { display: none; }
+  .nav-links .btn { padding: 8px 10px; letter-spacing: 0.1em; }
+}
+
+/* ----------------------------------------------------------------- modal */
+
+.modal-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 8600;
+  background: rgba(4, 4, 6, 0.82);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal {
+  width: min(460px, 100%);
+  background: var(--ink-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+}
+
+/* --------------------------------------------------------------- utility */
+
+.stack { display: grid; gap: 14px; }
+.stack-lg { display: grid; gap: 28px; }
+.row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.muted { color: var(--grey-dim); }
+.break { overflow-wrap: anywhere; }
+
+.hero-row {
+  display: grid;
+  gap: clamp(20px, 3vw, 56px);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+@media (max-width: 760px) {
+  .hero-row { grid-template-columns: 1fr; align-items: start; }
+  .hero-row .row { flex-wrap: wrap; }
+}
+
+.cols {
+  display: grid;
+  gap: clamp(14px, 1.6vw, 22px);
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+}
+
+.link-u {
+  border-bottom: 1px solid var(--line-strong);
+  transition: border-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+
+.link-u:hover {
+  color: var(--paper);
+  border-bottom-color: var(--vermilion);
+}
+
+.spin {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

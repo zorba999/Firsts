@@ -1,0 +1,23 @@
+# secrets — never commit
+.env
+.env.local
+.env*.local
+
+# deps / build
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# tooling
+.vercel
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+
+# editor / agent tooling
+.claude/
