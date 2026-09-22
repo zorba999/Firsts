@@ -71,6 +71,9 @@ Each of these cost a redeploy, and the fixes are commented in the contract:
   is cancelled with `max_recovery_cycles_exceeded` after three rotations.
 - **`TreeMap` raises on a missing key.** It does not create a default, so index
   buckets need `get_or_insert_default`.
+- **The GenLayer snap is not required to sign.** Taking `client.connect()` at
+  face value locks the dApp to MetaMask for no reason; reading the SDK shows the
+  snap is never invoked.
 
 ---
 
@@ -146,14 +149,32 @@ and no build-time chain call.
 
 Two connectors behind one interface, so pages only ever ask for `getClient()`:
 
-- **Browser wallet** — MetaMask or any EIP-6963 wallet, signing through the
-  GenLayer snap. Keys stay in the user's wallet.
+- **Browser wallet** — any EIP-6963 wallet. Rabby, MetaMask, OKX, Phantom;
+  nothing to install. Keys stay in the user's wallet.
 - **Session key** — a keypair generated in the browser and kept in
   localStorage. StudioNet is gasless, so it can write immediately with no
   install, no faucet and no seed phrase.
 
 The session key is a convenience for trying a test network and the UI says so.
 Nothing of value should sit behind it.
+
+### Why it does not call `client.connect()`
+
+genlayer-js ships a `connect()` helper that adds the network **and** installs
+the GenLayer MetaMask snap, reaching for `window.ethereum` rather than the
+provider it was handed. Both parts are trouble: snaps are MetaMask-only, and
+with several wallets installed an arbitrary one owns that global.
+
+The snap turns out not to be needed. `wallet_invokeSnap` appears nowhere in the
+SDK — a browser-wallet transaction is built as a legacy transaction and sent
+with a plain `eth_sendTransaction` through the provider passed to
+`createClient`. So the only thing `connect()` contributes is adding and
+switching the network, which the adapter does itself against the wallet the user
+picked.
+
+Verified by driving a snapless wallet through a real `verify_copy`: the wallet
+received exactly one call, `eth_sendTransaction`, carrying 586 bytes of calldata
+to the consensus contract on chain `0xf22f`.
 
 ---
 

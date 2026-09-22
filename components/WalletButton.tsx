@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { blockerText, useWallet, type WalletBlocker } from "@/lib/wallet";
+import { useWallet } from "@/lib/wallet";
 import { shortAddress, NETWORK_KEY, IS_GASLESS } from "@/lib/chain";
 
 export function WalletButton() {
@@ -61,14 +61,7 @@ export function WalletButton() {
 
 function WalletModal({ onClose }: { onClose: () => void }) {
   const wallet = useWallet();
-  const [showBlocked, setShowBlocked] = useState(false);
   const busy = wallet.status === "connecting";
-
-  const usable = wallet.injectedWallets.filter((entry) => entry.blocker === null);
-  const blocked = wallet.injectedWallets.filter(
-    (entry) => entry.blocker !== null && entry.blocker !== undefined,
-  );
-  const pending = wallet.injectedWallets.filter((entry) => entry.blocker === undefined);
 
   return (
     <div
@@ -90,13 +83,12 @@ function WalletModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="panel-pad stack">
-          {usable.map((entry) => (
+          {wallet.injectedWallets.map((entry) => (
             <ConnectorRow
               key={entry.id}
               title={entry.name}
               icon={entry.icon}
-              detail={blockerText(entry.blocker, entry.name)}
-              blocker={entry.blocker}
+              detail={`Signs on ${NETWORK_KEY}. The network is added on first connect.`}
               disabled={busy}
               onClick={() => void wallet.connectInjected(entry.id)}
             />
@@ -109,7 +101,6 @@ function WalletModal({ onClose }: { onClose: () => void }) {
                 ? `Generated in this browser. ${NETWORK_KEY} is gasless, so it can write immediately.`
                 : "Generated in this browser. Needs funding on a metered network."
             }
-            blocker={null}
             accent
             disabled={busy}
             onClick={() => void wallet.connectSession()}
@@ -121,52 +112,11 @@ function WalletModal({ onClose }: { onClose: () => void }) {
             </p>
           ) : null}
 
-          {/* A wall of red rows helps nobody. The wallets that cannot sign are
-              collapsed behind one line, openable for the reason why. */}
-          {blocked.length ? (
-            <div>
-              <button
-                className="hud"
-                onClick={() => setShowBlocked((value) => !value)}
-                style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 0" }}
-              >
-                <span>{showBlocked ? "−" : "+"}</span>
-                <span>
-                  {blocked.length} wallet{blocked.length === 1 ? "" : "s"} cannot sign GenLayer
-                  transactions
-                </span>
-              </button>
-              {showBlocked ? (
-                <div className="stack" style={{ marginTop: 12 }}>
-                  {blocked.map((entry) => (
-                    <ConnectorRow
-                      key={entry.id}
-                      title={entry.name}
-                      icon={entry.icon}
-                      detail={blockerText(entry.blocker, entry.name)}
-                      blocker={entry.blocker}
-                      disabled
-                      onClick={() => {}}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </div>
+          {!wallet.hasInjected ? (
+            <p className="hint">
+              No browser wallet detected. A session key works without one.
+            </p>
           ) : null}
-
-          {pending.length ? (
-            <p className="hint">Checking {pending.length} more wallet…</p>
-          ) : null}
-
-          {!wallet.injectedWallets.length ? (
-            <p className="hint">No browser wallet detected in this extension-free window.</p>
-          ) : null}
-
-          <p className="hint">
-            GenLayer transactions are signed by the GenLayer <strong>MetaMask
-            snap</strong>, so MetaMask is the only browser wallet that can sign
-            them today. A session key works everywhere and needs no install.
-          </p>
 
           <p className="hint">
             A session key lives in this browser&rsquo;s local storage and is meant
@@ -186,7 +136,6 @@ function ConnectorRow({
   onClick,
   disabled,
   accent,
-  blocker,
 }: {
   title: string;
   detail: string;
@@ -194,10 +143,7 @@ function ConnectorRow({
   onClick: () => void;
   disabled?: boolean;
   accent?: boolean;
-  blocker: WalletBlocker | undefined;
 }) {
-  const unavailable = blocker !== null && blocker !== undefined;
-
   return (
     <button
       onClick={onClick}
@@ -211,26 +157,22 @@ function ConnectorRow({
         borderColor: accent ? "rgba(229,72,44,0.4)" : undefined,
       }}
     >
-      <div className="spread" style={{ marginBottom: 6, gap: 10 }}>
-        <span className="row" style={{ gap: 9 }}>
-          {icon ? (
-            // Wallet-supplied data URI; no optimizer, no remote fetch.
-            <img src={icon} alt="" width={16} height={16} style={{ borderRadius: 3 }} />
-          ) : null}
-          <span
-            className="mono"
-            style={{
-              fontSize: 12.5,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-              color: accent ? "var(--vermilion)" : "var(--paper)",
-            }}
-          >
-            {title}
-          </span>
+      <div className="row" style={{ gap: 9, marginBottom: 6 }}>
+        {icon ? (
+          // Wallet-supplied data URI; no optimizer, no remote fetch.
+          <img src={icon} alt="" width={16} height={16} style={{ borderRadius: 3 }} />
+        ) : null}
+        <span
+          className="mono"
+          style={{
+            fontSize: 12.5,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            color: accent ? "var(--vermilion)" : "var(--paper)",
+          }}
+        >
+          {title}
         </span>
-        {unavailable ? <span className="chip tone-muted">Unavailable</span> : null}
-        {blocker === undefined ? <span className="spin tone-muted" /> : null}
       </div>
       <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--grey-dim)" }}>{detail}</div>
     </button>

@@ -3,17 +3,27 @@
 /**
  * Wallet adapter.
  *
- * Two connectors sit behind one interface:
+ * Two connectors behind one interface, so pages only ever ask for `getClient()`:
  *
- *   injected  — MetaMask (or any EIP-6963 wallet) signing through the GenLayer
- *               snap. This is the real path: keys stay in the user's wallet.
+ *   injected  — any EIP-6963 browser wallet. Keys stay in the user's wallet.
  *   session   — a keypair generated in the browser and kept in localStorage.
- *               StudioNet is gasless, so a session key can write immediately
- *               with no install, no faucet and no seed phrase. It is a demo
- *               convenience and the UI says so plainly.
+ *               StudioNet is gasless, so it can write with no install and no
+ *               faucet. A demo convenience, and the UI says so.
  *
- * Everything downstream only ever asks for `getClient()`, so pages do not care
- * which connector is live.
+ * ## Why this does not call `client.connect()`
+ *
+ * genlayer-js ships a `connect()` helper that adds the network *and* installs
+ * the GenLayer MetaMask snap, reaching for `window.ethereum` rather than the
+ * provider it was handed. Both parts are trouble: snaps are MetaMask-only, and
+ * with several wallets installed an arbitrary one owns that global.
+ *
+ * The snap turns out not to be needed. Nothing in the SDK ever calls
+ * `wallet_invokeSnap`; a browser-wallet transaction is built as a legacy
+ * transaction and sent with a plain `eth_sendTransaction` through the provider
+ * passed to `createClient`. So the only thing `connect()` contributes is adding
+ * and switching the network, which is done below against the wallet the user
+ * actually picked — leaving every EIP-6963 wallet able to sign, with nothing to
+ * install.
  */
 
 import {
@@ -28,7 +38,7 @@ import {
 } from "react";
 import { createAccount, createClient, generatePrivateKey } from "genlayer-js";
 import type { GenLayerClient } from "genlayer-js/types";
-import { CHAIN, NETWORK_KEY } from "./chain";
+import { CHAIN } from "./chain";
 
 export type ConnectorId = "injected" | "session";
 export type WalletStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -42,29 +52,30 @@ type Eip1193Provider = {
   removeListener?: (event: string, handler: (...args: never[]) => void) => void;
 };
 
-/**
- * Why a wallet may not be usable here.
- *
- * Only one thing actually disqualifies a wallet: GenLayer transactions are
- * signed by the GenLayer **MetaMask snap**, so a wallet with no snap support
- * cannot sign them at all.
- *
- * Not being the browser's primary wallet is *not* a blocker, which took reading
- * genlayer-js to establish. Transaction signing goes through the provider handed
- * to `createClient`, so whichever wallet the user picks is the one that signs.
- * Only `connect()` — the step that installs the snap — reaches for
- * `window.ethereum`, and that is worked around below.
- */
-export type WalletBlocker = null | "no-snaps" | "primary-locked";
-
-type DiscoveredWallet = {
+export type DiscoveredWallet = {
   id: string;
   name: string;
   icon?: string;
   provider: Eip1193Provider;
-  /** null once probed and usable; undefined while the probe is still running. */
-  blocker?: WalletBlocker;
 };
+
+export type WalletState = {
+  status: WalletStatus;
+  address: `0x${string}` | null;
+  connectorId: ConnectorId | null;
+  connectorLabel: string | null;
+  error: string | null;
+  injectedWallets: DiscoveredWallet[];
+  hasInjected: boolean;
+  connectInjected: (walletId?: string) => Promise<void>;
+  connectSession: () => Promise<void>;
+  disconnect: () => void;
+  exportSessionKey: () => string | null;
+  /** Throws when nothing is connected — callers should gate on `status`. */
+  getClient: () => GenLayerClient<typeof CHAIN>;
+};
+
+const WalletContext = createContext<WalletState | null>(null);
 
 /**
  * Turn whatever a wallet threw into something a person can read.
@@ -85,7 +96,7 @@ function describeProviderError(err: unknown): string {
       case 4200:
         return message || "This wallet does not support that method.";
       case 4902:
-        return "The GenLayer network is not added to this wallet.";
+        return "This wallet would not add the GenLayer network.";
       case -32002:
         return "The wallet already has a pending request — open it and finish that one first.";
       default:
@@ -101,106 +112,56 @@ function describeProviderError(err: unknown): string {
   return "The wallet returned an error with no message.";
 }
 
+const CHAIN_ID_HEX = `0x${CHAIN.id.toString(16)}`;
+
 /**
- * Probe rather than sniff. Several wallets set `isMetaMask: true` for
- * compatibility, so the flag proves nothing; asking for the snaps method does.
- * MetaMask answers `wallet_getSnaps` with `{}` before any snap is granted,
- * while a wallet without snap support rejects the method outright.
+ * Put the wallet on the GenLayer network, adding it first if it is unknown.
+ *
+ * Switch is attempted before add: a wallet that already has the network simply
+ * switches, whereas an unconditional add re-prompts on every connect.
  */
-async function probeBlocker(provider: Eip1193Provider): Promise<WalletBlocker> {
+async function ensureNetwork(provider: Eip1193Provider): Promise<void> {
   try {
-    await provider.request({ method: "wallet_getSnaps" });
-    return null;
+    const current = (await provider.request({ method: "eth_chainId" })) as string | null;
+    if (current && current.toLowerCase() === CHAIN_ID_HEX.toLowerCase()) return;
   } catch {
-    return "no-snaps";
+    /* some wallets refuse eth_chainId before connecting; fall through */
   }
-}
 
-/**
- * Point `window.ethereum` at `provider` for the duration of `run`, then restore.
- *
- * With several wallets installed they race for `window.ethereum` and an
- * arbitrary one wins. genlayer-js installs the GenLayer snap through that global
- * rather than through the provider it was handed, so without this the snap lands
- * in — or is refused by — whichever wallet happened to win the race, no matter
- * which one the user picked.
- *
- * Returns null if the global could not be swapped, which some wallets enforce by
- * defining it non-configurable.
- */
-async function withPrimaryProvider<T>(
-  provider: Eip1193Provider,
-  run: () => Promise<T>,
-): Promise<T | null> {
-  const target = window as unknown as { ethereum?: Eip1193Provider };
-  const original = target.ethereum;
-
-  if (original === provider) return run();
-
-  const assign = (value: Eip1193Provider | undefined) => {
-    try {
-      Object.defineProperty(window, "ethereum", {
-        value,
-        configurable: true,
-        writable: true,
-      });
-      return target.ethereum === value;
-    } catch {
-      try {
-        target.ethereum = value;
-        return target.ethereum === value;
-      } catch {
-        return false;
-      }
-    }
-  };
-
-  if (!assign(provider)) return null;
   try {
-    return await run();
-  } finally {
-    assign(original);
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: CHAIN_ID_HEX }],
+    });
+    return;
+  } catch (err) {
+    const code = (err as { code?: number })?.code;
+    // 4902 is the standard "unrecognized chain"; several wallets report the
+    // same condition as a generic internal or invalid-params error instead.
+    if (code !== 4902 && code !== -32603 && code !== -32602) throw err;
   }
+
+  const explorer = CHAIN.blockExplorers?.default?.url;
+  await provider.request({
+    method: "wallet_addEthereumChain",
+    params: [
+      {
+        chainId: CHAIN_ID_HEX,
+        chainName: CHAIN.name,
+        rpcUrls: [...CHAIN.rpcUrls.default.http],
+        nativeCurrency: CHAIN.nativeCurrency,
+        ...(explorer ? { blockExplorerUrls: [explorer] } : {}),
+      },
+    ],
+  });
+
+  await provider.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: CHAIN_ID_HEX }],
+  });
 }
 
-export function blockerText(blocker: WalletBlocker | undefined, name: string): string {
-  if (blocker === undefined) return "Checking what this wallet supports…";
-  if (blocker === "no-snaps") {
-    return `${name} cannot sign GenLayer transactions — they go through the GenLayer MetaMask snap, which ${name} does not support.`;
-  }
-  if (blocker === "primary-locked") {
-    return `${name} supports snaps, but another extension is holding this browser's wallet slot and will not release it. Disable the other wallet, or continue with a session key.`;
-  }
-  return "Signs through the GenLayer snap.";
-}
-
-export type WalletState = {
-  status: WalletStatus;
-  address: `0x${string}` | null;
-  connectorId: ConnectorId | null;
-  connectorLabel: string | null;
-  error: string | null;
-  injectedWallets: DiscoveredWallet[];
-  hasInjected: boolean;
-  /** True once at least one discovered wallet has been probed and is usable. */
-  hasUsableInjected: boolean;
-  connectInjected: (walletId?: string) => Promise<void>;
-  connectSession: () => Promise<void>;
-  disconnect: () => void;
-  exportSessionKey: () => string | null;
-  /** Throws when nothing is connected — callers should gate on `status`. */
-  getClient: () => GenLayerClient<typeof CHAIN>;
-};
-
-const WalletContext = createContext<WalletState | null>(null);
-
-/**
- * EIP-6963 discovery, so Rabby/Frame/etc. are offered, not just MetaMask.
- *
- * Each wallet is probed as it announces itself rather than once on a timer:
- * wallets announce at their own pace, and a late one would otherwise sit in
- * "checking…" forever.
- */
+/** EIP-6963 discovery, so every installed wallet is offered, not just one. */
 function useDiscoveredWallets(): DiscoveredWallet[] {
   const [wallets, setWallets] = useState<DiscoveredWallet[]>([]);
 
@@ -209,34 +170,18 @@ function useDiscoveredWallets(): DiscoveredWallet[] {
     const seen = new Map<string, DiscoveredWallet>();
     let alive = true;
 
-    const publish = () => {
-      if (alive) setWallets([...seen.values()]);
-    };
-
-    const add = (wallet: DiscoveredWallet) => {
-      if (seen.has(wallet.id)) return;
-      seen.set(wallet.id, wallet);
-      publish();
-      // Read-only probe; it raises no wallet prompt.
-      void probeBlocker(wallet.provider).then((blocker) => {
-        const current = seen.get(wallet.id);
-        if (!current) return;
-        seen.set(wallet.id, { ...current, blocker });
-        publish();
-      });
-    };
-
     const onAnnounce = (event: Event) => {
       const detail = (event as CustomEvent).detail as
         | { info?: { uuid?: string; name?: string; icon?: string }; provider?: Eip1193Provider }
         | undefined;
-      if (!detail?.provider || !detail.info?.uuid) return;
-      add({
+      if (!detail?.provider || !detail.info?.uuid || seen.has(detail.info.uuid)) return;
+      seen.set(detail.info.uuid, {
         id: detail.info.uuid,
         name: detail.info.name || "Injected wallet",
         icon: detail.info.icon,
         provider: detail.provider,
       });
+      if (alive) setWallets([...seen.values()]);
     };
 
     window.addEventListener("eip6963:announceProvider", onAnnounce);
@@ -246,8 +191,9 @@ function useDiscoveredWallets(): DiscoveredWallet[] {
     // a wallet that does announce wins the slot and keeps its real name.
     const legacyTimer = window.setTimeout(() => {
       const legacy = (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
-      if (legacy && seen.size === 0) {
-        add({ id: "legacy", name: "Browser wallet", provider: legacy });
+      if (legacy && seen.size === 0 && alive) {
+        seen.set("legacy", { id: "legacy", name: "Browser wallet", provider: legacy });
+        setWallets([...seen.values()]);
       }
     }, 400);
 
@@ -287,9 +233,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [connectorLabel, setConnectorLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const clientRef = useRef<GenLayerClient<typeof CHAIN> | null>(null);
+  const activeProvider = useRef<Eip1193Provider | null>(null);
 
   const disconnect = useCallback(() => {
     clientRef.current = null;
+    activeProvider.current = null;
     setStatus("disconnected");
     setAddress(null);
     setConnectorId(null);
@@ -313,6 +261,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
       const account = createAccount(key);
       clientRef.current = createClient({ chain: CHAIN, account }) as GenLayerClient<typeof CHAIN>;
+      activeProvider.current = null;
       setAddress(account.address as `0x${string}`);
       setConnectorId("session");
       setConnectorLabel("Session key");
@@ -333,34 +282,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           injectedWallets.find((entry) => entry.id === walletId) || injectedWallets[0];
         if (!wallet) throw new Error("No browser wallet detected.");
 
-        // Re-probe at click time: the user may have installed or removed a
-        // wallet since the page loaded.
-        const blocker = await probeBlocker(wallet.provider);
-        if (blocker) throw new Error(blockerText(blocker, wallet.name));
-
         const accounts = (await wallet.provider.request({
           method: "eth_requestAccounts",
         })) as string[];
         const account = accounts?.[0];
         if (!account) throw new Error("The wallet returned no account.");
 
-        const client = createClient({
+        await ensureNetwork(wallet.provider);
+
+        clientRef.current = createClient({
           chain: CHAIN,
           account: account as `0x${string}`,
           provider: wallet.provider as never,
         }) as GenLayerClient<typeof CHAIN>;
+        activeProvider.current = wallet.provider;
 
-        // Adds the GenLayer network and installs the snap — the one step that
-        // reads `window.ethereum` instead of the provider above, so the global
-        // is pointed at the chosen wallet just for this call. Expect prompts.
-        const connected = await withPrimaryProvider(wallet.provider, () =>
-          client.connect(NETWORK_KEY),
-        );
-        if (connected === null) {
-          throw new Error(blockerText("primary-locked", wallet.name));
-        }
-
-        clientRef.current = client;
         setAddress(account as `0x${string}`);
         setConnectorId("injected");
         setConnectorLabel(wallet.name);
@@ -374,8 +310,33 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [injectedWallets],
   );
 
+  // Follow the wallet: switching account in the extension switches it here too,
+  // and locking the wallet disconnects rather than leaving a stale address that
+  // can no longer sign.
+  useEffect(() => {
+    const provider = activeProvider.current;
+    if (connectorId !== "injected" || !provider?.on) return;
+
+    const onAccountsChanged = (...args: never[]) => {
+      const next = (args[0] as unknown as string[] | undefined)?.[0];
+      if (!next) {
+        disconnect();
+        return;
+      }
+      setAddress(next as `0x${string}`);
+      clientRef.current = createClient({
+        chain: CHAIN,
+        account: next as `0x${string}`,
+        provider: provider as never,
+      }) as GenLayerClient<typeof CHAIN>;
+    };
+
+    provider.on("accountsChanged", onAccountsChanged);
+    return () => provider.removeListener?.("accountsChanged", onAccountsChanged);
+  }, [connectorId, address, disconnect]);
+
   // Restore a session key silently on reload. An injected wallet is never
-  // reconnected without a click — that would pop a prompt the user did not ask for.
+  // reconnected without a click — that would pop a prompt nobody asked for.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -406,7 +367,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       error,
       injectedWallets,
       hasInjected: injectedWallets.length > 0,
-      hasUsableInjected: injectedWallets.some((entry) => entry.blocker === null),
       connectInjected,
       connectSession,
       disconnect,
