@@ -45,13 +45,17 @@ type Eip1193Provider = {
 /**
  * Why a wallet may not be usable here.
  *
- * GenLayer transactions are signed by the GenLayer MetaMask **snap**, and
- * genlayer-js reaches for `window.ethereum` directly when it installs and
- * invokes it. That puts two hard requirements on a browser wallet, and a wallet
- * failing either of them fails deep inside the SDK with an opaque error — so
- * both are probed up front and reported plainly instead.
+ * Only one thing actually disqualifies a wallet: GenLayer transactions are
+ * signed by the GenLayer **MetaMask snap**, so a wallet with no snap support
+ * cannot sign them at all.
+ *
+ * Not being the browser's primary wallet is *not* a blocker, which took reading
+ * genlayer-js to establish. Transaction signing goes through the provider handed
+ * to `createClient`, so whichever wallet the user picks is the one that signs.
+ * Only `connect()` — the step that installs the snap — reaches for
+ * `window.ethereum`, and that is worked around below.
  */
-export type WalletBlocker = null | "no-snaps" | "not-primary";
+export type WalletBlocker = null | "no-snaps" | "primary-locked";
 
 type DiscoveredWallet = {
   id: string;
@@ -100,10 +104,10 @@ function describeProviderError(err: unknown): string {
 /**
  * Probe rather than sniff. Several wallets set `isMetaMask: true` for
  * compatibility, so the flag proves nothing; asking for the snaps method does.
+ * MetaMask answers `wallet_getSnaps` with `{}` before any snap is granted,
+ * while a wallet without snap support rejects the method outright.
  */
 async function probeBlocker(provider: Eip1193Provider): Promise<WalletBlocker> {
-  const primary = (window as unknown as { ethereum?: Eip1193Provider }).ethereum;
-  if (primary && provider !== primary) return "not-primary";
   try {
     await provider.request({ method: "wallet_getSnaps" });
     return null;
@@ -112,13 +116,60 @@ async function probeBlocker(provider: Eip1193Provider): Promise<WalletBlocker> {
   }
 }
 
+/**
+ * Point `window.ethereum` at `provider` for the duration of `run`, then restore.
+ *
+ * With several wallets installed they race for `window.ethereum` and an
+ * arbitrary one wins. genlayer-js installs the GenLayer snap through that global
+ * rather than through the provider it was handed, so without this the snap lands
+ * in — or is refused by — whichever wallet happened to win the race, no matter
+ * which one the user picked.
+ *
+ * Returns null if the global could not be swapped, which some wallets enforce by
+ * defining it non-configurable.
+ */
+async function withPrimaryProvider<T>(
+  provider: Eip1193Provider,
+  run: () => Promise<T>,
+): Promise<T | null> {
+  const target = window as unknown as { ethereum?: Eip1193Provider };
+  const original = target.ethereum;
+
+  if (original === provider) return run();
+
+  const assign = (value: Eip1193Provider | undefined) => {
+    try {
+      Object.defineProperty(window, "ethereum", {
+        value,
+        configurable: true,
+        writable: true,
+      });
+      return target.ethereum === value;
+    } catch {
+      try {
+        target.ethereum = value;
+        return target.ethereum === value;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  if (!assign(provider)) return null;
+  try {
+    return await run();
+  } finally {
+    assign(original);
+  }
+}
+
 export function blockerText(blocker: WalletBlocker | undefined, name: string): string {
   if (blocker === undefined) return "Checking what this wallet supports…";
   if (blocker === "no-snaps") {
-    return `${name} cannot sign GenLayer transactions — they go through the GenLayer MetaMask snap, which ${name} does not support. Use MetaMask, or continue with a session key.`;
+    return `${name} cannot sign GenLayer transactions — they go through the GenLayer MetaMask snap, which ${name} does not support.`;
   }
-  if (blocker === "not-primary") {
-    return `${name} is installed but is not this browser's primary wallet, and the GenLayer snap is only reachable through the primary one. Make ${name} the default wallet, or continue with a session key.`;
+  if (blocker === "primary-locked") {
+    return `${name} supports snaps, but another extension is holding this browser's wallet slot and will not release it. Disable the other wallet, or continue with a session key.`;
   }
   return "Signs through the GenLayer snap.";
 }
@@ -282,8 +333,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           injectedWallets.find((entry) => entry.id === walletId) || injectedWallets[0];
         if (!wallet) throw new Error("No browser wallet detected.");
 
-        // Re-probe at click time: the user may have switched their default
-        // wallet, or installed MetaMask, since the page loaded.
+        // Re-probe at click time: the user may have installed or removed a
+        // wallet since the page loaded.
         const blocker = await probeBlocker(wallet.provider);
         if (blocker) throw new Error(blockerText(blocker, wallet.name));
 
@@ -299,9 +350,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           provider: wallet.provider as never,
         }) as GenLayerClient<typeof CHAIN>;
 
-        // GenLayer transactions are signed through the GenLayer snap; this is
-        // the step that installs/unlocks it and will surface a wallet prompt.
-        await client.connect(NETWORK_KEY);
+        // Adds the GenLayer network and installs the snap — the one step that
+        // reads `window.ethereum` instead of the provider above, so the global
+        // is pointed at the chosen wallet just for this call. Expect prompts.
+        const connected = await withPrimaryProvider(wallet.provider, () =>
+          client.connect(NETWORK_KEY),
+        );
+        if (connected === null) {
+          throw new Error(blockerText("primary-locked", wallet.name));
+        }
 
         clientRef.current = client;
         setAddress(account as `0x${string}`);

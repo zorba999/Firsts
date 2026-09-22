@@ -61,7 +61,14 @@ export function WalletButton() {
 
 function WalletModal({ onClose }: { onClose: () => void }) {
   const wallet = useWallet();
+  const [showBlocked, setShowBlocked] = useState(false);
   const busy = wallet.status === "connecting";
+
+  const usable = wallet.injectedWallets.filter((entry) => entry.blocker === null);
+  const blocked = wallet.injectedWallets.filter(
+    (entry) => entry.blocker !== null && entry.blocker !== undefined,
+  );
+  const pending = wallet.injectedWallets.filter((entry) => entry.blocker === undefined);
 
   return (
     <div
@@ -83,27 +90,17 @@ function WalletModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="panel-pad stack">
-          {wallet.injectedWallets.length ? (
-            wallet.injectedWallets.map((entry) => (
-              <ConnectorRow
-                key={entry.id}
-                title={entry.name}
-                icon={entry.icon}
-                detail={blockerText(entry.blocker, entry.name)}
-                blocker={entry.blocker}
-                disabled={busy || entry.blocker !== null}
-                onClick={() => void wallet.connectInjected(entry.id)}
-              />
-            ))
-          ) : (
+          {usable.map((entry) => (
             <ConnectorRow
-              title="Browser wallet"
-              detail="No injected wallet detected in this browser."
-              blocker={null}
-              disabled
-              onClick={() => {}}
+              key={entry.id}
+              title={entry.name}
+              icon={entry.icon}
+              detail={blockerText(entry.blocker, entry.name)}
+              blocker={entry.blocker}
+              disabled={busy}
+              onClick={() => void wallet.connectInjected(entry.id)}
             />
-          )}
+          ))}
 
           <ConnectorRow
             title="Session key"
@@ -124,13 +121,52 @@ function WalletModal({ onClose }: { onClose: () => void }) {
             </p>
           ) : null}
 
-          {!wallet.hasUsableInjected && wallet.injectedWallets.length ? (
-            <p className="hint">
-              GenLayer transactions are signed by the GenLayer <strong>MetaMask
-              snap</strong>, so only MetaMask can sign them today. Everything on
-              this site works with a session key instead.
-            </p>
+          {/* A wall of red rows helps nobody. The wallets that cannot sign are
+              collapsed behind one line, openable for the reason why. */}
+          {blocked.length ? (
+            <div>
+              <button
+                className="hud"
+                onClick={() => setShowBlocked((value) => !value)}
+                style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 0" }}
+              >
+                <span>{showBlocked ? "−" : "+"}</span>
+                <span>
+                  {blocked.length} wallet{blocked.length === 1 ? "" : "s"} cannot sign GenLayer
+                  transactions
+                </span>
+              </button>
+              {showBlocked ? (
+                <div className="stack" style={{ marginTop: 12 }}>
+                  {blocked.map((entry) => (
+                    <ConnectorRow
+                      key={entry.id}
+                      title={entry.name}
+                      icon={entry.icon}
+                      detail={blockerText(entry.blocker, entry.name)}
+                      blocker={entry.blocker}
+                      disabled
+                      onClick={() => {}}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ) : null}
+
+          {pending.length ? (
+            <p className="hint">Checking {pending.length} more wallet…</p>
+          ) : null}
+
+          {!wallet.injectedWallets.length ? (
+            <p className="hint">No browser wallet detected in this extension-free window.</p>
+          ) : null}
+
+          <p className="hint">
+            GenLayer transactions are signed by the GenLayer <strong>MetaMask
+            snap</strong>, so MetaMask is the only browser wallet that can sign
+            them today. A session key works everywhere and needs no install.
+          </p>
 
           <p className="hint">
             A session key lives in this browser&rsquo;s local storage and is meant
