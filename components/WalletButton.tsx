@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useWallet } from "@/lib/wallet";
+import { blockerText, useWallet, type WalletBlocker } from "@/lib/wallet";
 import { shortAddress, NETWORK_KEY, IS_GASLESS } from "@/lib/chain";
 
 export function WalletButton() {
@@ -61,6 +61,7 @@ export function WalletButton() {
 
 function WalletModal({ onClose }: { onClose: () => void }) {
   const wallet = useWallet();
+  const busy = wallet.status === "connecting";
 
   return (
     <div
@@ -82,16 +83,27 @@ function WalletModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="panel-pad stack">
-          <ConnectorRow
-            title="Browser wallet"
-            detail={
-              wallet.hasInjected
-                ? `${wallet.injectedWallets[0]?.name} · signs through the GenLayer snap`
-                : "No injected wallet detected in this browser"
-            }
-            disabled={!wallet.hasInjected || wallet.status === "connecting"}
-            onClick={() => void wallet.connectInjected()}
-          />
+          {wallet.injectedWallets.length ? (
+            wallet.injectedWallets.map((entry) => (
+              <ConnectorRow
+                key={entry.id}
+                title={entry.name}
+                icon={entry.icon}
+                detail={blockerText(entry.blocker, entry.name)}
+                blocker={entry.blocker}
+                disabled={busy || entry.blocker !== null}
+                onClick={() => void wallet.connectInjected(entry.id)}
+              />
+            ))
+          ) : (
+            <ConnectorRow
+              title="Browser wallet"
+              detail="No injected wallet detected in this browser."
+              blocker={null}
+              disabled
+              onClick={() => {}}
+            />
+          )}
 
           <ConnectorRow
             title="Session key"
@@ -100,14 +112,23 @@ function WalletModal({ onClose }: { onClose: () => void }) {
                 ? `Generated in this browser. ${NETWORK_KEY} is gasless, so it can write immediately.`
                 : "Generated in this browser. Needs funding on a metered network."
             }
+            blocker={null}
             accent
-            disabled={wallet.status === "connecting"}
+            disabled={busy}
             onClick={() => void wallet.connectSession()}
           />
 
           {wallet.error ? (
-            <p className="hint" style={{ color: "var(--vermilion)" }}>
+            <p className="hint break" style={{ color: "var(--vermilion)" }}>
               {wallet.error}
+            </p>
+          ) : null}
+
+          {!wallet.hasUsableInjected && wallet.injectedWallets.length ? (
+            <p className="hint">
+              GenLayer transactions are signed by the GenLayer <strong>MetaMask
+              snap</strong>, so only MetaMask can sign them today. Everything on
+              this site works with a session key instead.
             </p>
           ) : null}
 
@@ -125,16 +146,22 @@ function WalletModal({ onClose }: { onClose: () => void }) {
 function ConnectorRow({
   title,
   detail,
+  icon,
   onClick,
   disabled,
   accent,
+  blocker,
 }: {
   title: string;
   detail: string;
+  icon?: string;
   onClick: () => void;
   disabled?: boolean;
   accent?: boolean;
+  blocker: WalletBlocker | undefined;
 }) {
+  const unavailable = blocker !== null && blocker !== undefined;
+
   return (
     <button
       onClick={onClick}
@@ -143,22 +170,31 @@ function ConnectorRow({
       style={{
         textAlign: "left",
         padding: "16px 18px",
-        opacity: disabled ? 0.45 : 1,
+        opacity: disabled ? 0.55 : 1,
         cursor: disabled ? "not-allowed" : "pointer",
         borderColor: accent ? "rgba(229,72,44,0.4)" : undefined,
       }}
     >
-      <div
-        className="mono"
-        style={{
-          fontSize: 12.5,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: accent ? "var(--vermilion)" : "var(--paper)",
-          marginBottom: 6,
-        }}
-      >
-        {title}
+      <div className="spread" style={{ marginBottom: 6, gap: 10 }}>
+        <span className="row" style={{ gap: 9 }}>
+          {icon ? (
+            // Wallet-supplied data URI; no optimizer, no remote fetch.
+            <img src={icon} alt="" width={16} height={16} style={{ borderRadius: 3 }} />
+          ) : null}
+          <span
+            className="mono"
+            style={{
+              fontSize: 12.5,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+              color: accent ? "var(--vermilion)" : "var(--paper)",
+            }}
+          >
+            {title}
+          </span>
+        </span>
+        {unavailable ? <span className="chip tone-muted">Unavailable</span> : null}
+        {blocker === undefined ? <span className="spin tone-muted" /> : null}
       </div>
       <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--grey-dim)" }}>{detail}</div>
     </button>
