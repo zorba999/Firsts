@@ -187,6 +187,27 @@ export const getCertificate = (id: string) =>
 export const getChallenges = (certId: string) =>
   read<Challenge[]>("get_challenges", [certId], []);
 
+/**
+ * The sentence under a verdict, specific to how that verdict was reached.
+ *
+ * `NOT_FIRST_PRINTING` has two routes through the contract's scoring — a
+ * decisive point (weight 9+) contradicted, or simply too little of the
+ * checklist matching — and the static blurb only described the first. Saying
+ * "a decisive point contradicts" about a copy whose only point was weight 3 is
+ * the kind of small false claim a certificate cannot afford.
+ */
+export function verdictBlurb(certificate: Certificate): string {
+  const meta = VERDICT_META[certificate.verdict];
+  if (certificate.verdict !== "NOT_FIRST_PRINTING") return meta?.blurb ?? "";
+
+  const decisiveFailed = (certificate.points || []).some(
+    (point) => point.weight >= 9 && point.verdict === "NO_MATCH",
+  );
+  return decisiveFailed
+    ? "A decisive point contradicts the first-printing state, which settles it on its own."
+    : "Too little of the checklist matched. No single point settles it, but the weight of the evidence is against this copy.";
+}
+
 /** Basis points → a percentage string, no floating-point surprises. */
 export const bp = (value: number | undefined) =>
   `${Math.round(((value ?? 0) / 10000) * 100)}%`;

@@ -10,6 +10,7 @@ import { CONTRACT_ADDRESS, NETWORK_KEY, shortAddress } from "@/lib/chain";
 import {
   VERDICT_META,
   bp,
+  verdictBlurb,
   getCertificate,
   getChallenges,
   type Certificate,
@@ -92,7 +93,7 @@ export default function CertificatePage({ params }: { params: Promise<{ id: stri
         </div>
 
         <p className="lede" style={{ fontSize: 15, marginBottom: 30 }}>
-          {meta?.blurb}
+          {verdictBlurb(certificate)}
         </p>
 
         <div
